@@ -196,7 +196,7 @@ int handle_db_result(pg_conn_t *conn_t, uint32_t events, int epfd) {
             printf("PG flush completed, removing EPOLLOUT\n");
             
             struct epoll_event ev;
-            ev.events = EPOLLIN | EPOLLET; // EPOLLOUT 제거
+            ev.events = EPOLLIN | EPOLLET; // EPOLLOUT 제거, EPOLLET -> edge triggered 모드  -> 다읽을 때까지 계속 읽어야함
             ev.data.ptr = conn_t->pg_event_data;
             
             if (epoll_ctl(epfd, EPOLL_CTL_MOD, pg_fd, &ev) == -1) {
@@ -208,7 +208,12 @@ int handle_db_result(pg_conn_t *conn_t, uint32_t events, int epfd) {
         }
         // flush_result == 1: 아직 flush 중, 계속 대기
     }
-    
+
+    //메소드 호출 예시
+    //epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
+    //epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev);
+    //epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
+
     // EPOLLIN: 결과 수신
     if (events & EPOLLIN) {
         // 입력 데이터 소비
@@ -222,7 +227,11 @@ int handle_db_result(pg_conn_t *conn_t, uint32_t events, int epfd) {
             return 0;
         }
         
-        // 결과 가져오기
+        // 결과 가져오기 
+        /*
+            다 읽을때 까지 읽어야 epoll_wait 횟수 줄임
+            systemcall 비용이 read보다 epoll_wait가 더 크기 때문
+        */
         PGresult *res;
         while ((res = PQgetResult(conn_t->conn)) != NULL) {
             ExecStatusType status = PQresultStatus(res);
