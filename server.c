@@ -140,14 +140,14 @@ int set_nonblock(int fd) {
 
 void dump_epoll_events(uint32_t events)
 {
-    if (events & EPOLLIN)        printf("EPOLLIN        ");
-    if (events & EPOLLOUT)       printf("EPOLLOUT       ");
-    if (events & EPOLLRDHUP)     printf("EPOLLRDHUP     ");
-    if (events & EPOLLHUP)       printf("EPOLLHUP       ");
-    if (events & EPOLLERR)       printf("EPOLLERR       ");
-    if (events & EPOLLPRI)       printf("EPOLLPRI       ");
-    if (events & EPOLLET)        printf("EPOLLET        ");
-    if (events & EPOLLONESHOT)   printf("EPOLLONESHOT   ");
+    if (events & EPOLLIN)        printf("EPOLLIN        "); // 읽을 수 있는 데이터 있음 (또는 FIN → read()==0)
+    if (events & EPOLLOUT)       printf("EPOLLOUT       "); // write 가능 (send buffer 여유 / connect 완료)
+    if (events & EPOLLRDHUP)     printf("EPOLLRDHUP     "); // 상대가 write 종료(FIN), 마지막 데이터 가능
+    if (events & EPOLLHUP)       printf("EPOLLHUP       "); // 소켓 완전 종료(hang up), 즉시 close 대상
+    if (events & EPOLLERR)       printf("EPOLLERR       "); // 소켓 에러 발생, read/write 금지
+    if (events & EPOLLPRI)       printf("EPOLLPRI       "); // 긴급 데이터(OOB), 일반 서버는 거의 안 씀
+    if (events & EPOLLET)        printf("EPOLLET        "); // Edge Triggered 모드
+    if (events & EPOLLONESHOT)   printf("EPOLLONESHOT   "); // 이벤트 1회성, 처리 후 재등록 필요
     printf("(0x%x)\n", events);
 }
 
@@ -172,7 +172,7 @@ int start_db_insert(pg_conn_t *conn_t, epoll_event_t *client_data, int epfd) {
     // 쿼리 전송 후 EPOLLOUT 추가 (flush 대기)
     int pg_fd = PQsocket(conn_t->conn);
     struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
+    ev.events = EPOLLIN | EPOLLOUT | EPOLLET;           // EPOLLOUT 쓰기 가능 대기
     ev.data.ptr = conn_t->pg_event_data;
     
     if (epoll_ctl(epfd, EPOLL_CTL_MOD, pg_fd, &ev) == -1) {
@@ -319,7 +319,7 @@ int main() {
     create_table();
 
     while (1) {
-        int n = epoll_wait(g_epfd, events, MAX_EVENTS + POOL_SIZE, -1);
+        int n = epoll_wait(g_epfd, events, MAX_EVENTS + POOL_SIZE, -1);         //최대 MAX_EVENTS + POOL_SIZE 만큼 events 에 담김
 
         for (int i = 0; i < n; i++) 
         {
