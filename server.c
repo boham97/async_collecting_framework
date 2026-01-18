@@ -172,7 +172,7 @@ int start_db_insert(pg_conn_t *conn_t, epoll_event_t *client_data, int epfd) {
     // 쿼리 전송 후 EPOLLOUT 추가 (flush 대기)
     int pg_fd = PQsocket(conn_t->conn);
     struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLOUT | EPOLLET;           // EPOLLOUT 쓰기 가능 대기
+    ev.events = EPOLLOUT | EPOLLET;           // EPOLLOUT 쓰기 가능 대기 epollin 제거 -> 이벤트 하나만 감지
     ev.data.ptr = conn_t->pg_event_data;
     
     if (epoll_ctl(epfd, EPOLL_CTL_MOD, pg_fd, &ev) == -1) {
