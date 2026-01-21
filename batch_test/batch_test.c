@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
+#include <arpa/inet.h>
 
 #define BATCH_SIZE 100
 
@@ -414,6 +415,81 @@ void show_sample_data(PGconn *conn, int limit) {
     printf("\n");
 }
 
+/* 방법 4: COPY BINARY */
+timing_t test_copy_binary(PGconn *conn, int count) {
+    printf("=== Test 4: COPY BINARY ===\n");
+    printf("Inserting %d rows using COPY BINARY...\n", count);
+
+    truncate_table(conn);
+
+    double total_start = get_time();
+    double prep_time = 0;
+    double query_time = 0;
+
+    PGresult *res = PQexec(conn,
+        "COPY batch_test (client_fd, message) FROM STDIN BINARY");
+    if (PQresultStatus(res) != PGRES_COPY_IN) {
+        fprintf(stderr, "COPY start failed: %s\n", PQerrorMessage(conn));
+        PQclear(res);
+        timing_t err = {-1, -1, -1};
+        return err;
+    }
+    PQclear(res);
+
+    /* ---- header ---- */
+    const char hdr[] = "PGCOPY\n\377\r\n\0";
+    int32_t flags = htonl(0);
+    int32_t ext = htonl(0);
+
+    double prep_start = get_time();
+    PQputCopyData(conn, hdr, 11);
+    PQputCopyData(conn, (char *)&flags, 4);
+    PQputCopyData(conn, (char *)&ext, 4);
+    prep_time += get_time() - prep_start;
+
+    /* ---- rows ---- */
+    double query_start = get_time();
+
+    for (int i = 0; i < count; i++) {
+        int16_t fc = htons(2);
+        PQputCopyData(conn, (char *)&fc, 2);
+
+        int32_t len = htonl(4);
+        int32_t fd = htonl(i);
+        PQputCopyData(conn, (char *)&len, 4);
+        PQputCopyData(conn, (char *)&fd, 4);
+
+        char msg[64];
+        int mlen = snprintf(msg, sizeof(msg), "message_%d", i);
+        int32_t mlen_net = htonl(mlen);
+        PQputCopyData(conn, (char *)&mlen_net, 4);
+        PQputCopyData(conn, msg, mlen);
+    }
+
+    int16_t end = htons(-1);
+    PQputCopyData(conn, (char *)&end, 2);
+    PQputCopyEnd(conn, NULL);
+
+    while ((res = PQgetResult(conn)) != NULL)
+        PQclear(res);
+
+    query_time += get_time() - query_start;
+
+    double total_elapsed = get_time() - total_start;
+    int final_count = count_records(conn);
+
+    printf("Time elapsed:\n");
+    printf("  Data preparation: %.6f seconds (%.1f%%)\n",
+           prep_time, 100.0 * prep_time / total_elapsed);
+    printf("  Query execution:  %.6f seconds (%.1f%%)\n",
+           query_time, 100.0 * query_time / total_elapsed);
+    printf("  Total:            %.6f seconds\n", total_elapsed);
+    printf("Records inserted: %d\n", final_count);
+    printf("Rate: %.1f inserts/sec\n\n", count / total_elapsed);
+
+    timing_t r = {prep_time, query_time, total_elapsed};
+    return r;
+}
 int main(int argc, char *argv[]) {
     const char *conninfo;
     int test_count = 1000;
@@ -444,7 +520,7 @@ int main(int argc, char *argv[]) {
     
     printf("Connected to PostgreSQL %s\n\n", 
            PQparameterStatus(conn, "server_version"));
-    
+    drop_test_table(conn);
     if (create_test_table(conn) != 0) {
         PQfinish(conn);
         return 1;
@@ -454,7 +530,8 @@ int main(int argc, char *argv[]) {
     timing_t t1 = test_individual_insert(conn, test_count);
     timing_t t2 = test_batch_insert(conn, test_count);
     timing_t t3 = test_buffered_insert(conn, test_count);
-    
+    timing_t t4 = test_copy_binary(conn, test_count);
+
     // 결과 요약
     printf("========================================\n");
     printf("Performance Summary\n");
@@ -471,6 +548,9 @@ int main(int argc, char *argv[]) {
     printf("3. Buffered Batch       %7.3fs    %7.3fs    %7.3fs    %10.1f       %5.1fx\n", 
            t3.prep_time, t3.query_time, t3.total_time, test_count / t3.total_time,
            t1.total_time / t3.total_time);
+    printf("4. COPY BINARY          %7.3fs    %7.3fs    %7.3fs    %10.1f       %5.1fx\n",
+            t4.prep_time, t4.query_time, t4.total_time, test_count / t4.total_time,
+            t1.total_time / t4.total_time);
     printf("\n");
     
     printf("Time Breakdown:\n");
@@ -483,7 +563,9 @@ int main(int argc, char *argv[]) {
     printf("Buffered   - Prep: %.1f%%, Query: %.1f%%\n\n",
            100.0 * t3.prep_time / t3.total_time,
            100.0 * t3.query_time / t3.total_time);
-    
+    printf("Binary     - Prep: %.1f%%, Query: %.1f%%\n\n",
+           100.0 * t4.prep_time /  t4.total_time,
+           100.0 * t4.query_time / t4.total_time);
     show_sample_data(conn, 5);
     drop_test_table(conn);
     PQfinish(conn);
